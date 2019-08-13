@@ -29,15 +29,6 @@ namespace WebAnnotation.UI.Commands
             }
         }
 
-        public static int _NextID = 0;
-        public int ID;
-
-        private void AssignID()
-        {
-            this.ID = _NextID;
-            _NextID = _NextID + 1;
-        }
-
         Viking.VolumeModel.IVolumeToSectionTransform mapping;
 
         /// <summary>
@@ -54,16 +45,20 @@ namespace WebAnnotation.UI.Commands
                                         OnCommandSuccess success_callback)
             : base(parent, color, origin, LineWidth, false, success_callback)
         {
-            AssignID();
             mapping = parent.Section.ActiveSectionToVolumeTransform;
             this.OriginalMosaicPolygon = mosaic_polygon;
             this.OriginalVolumePolygon = mapping.TryMapShapeSectionToVolume(mosaic_polygon);
             //SmoothedVolumePolygon = OriginalVolumePolygon.Smooth(Global.NumClosedCurveInterpolationPoints);
 
             ExteriorSegments = OriginalVolumePolygon.ExteriorSegments.ToList();
-
+            /**
+            if (OriginalVolumePolygon.HasInteriorRings)
+            {
+                OriginalVolumePolygon.Inter
+            }
+    **/
             //PenInput.Push(origin);
-            leftPolygonAtPathLength = 0;
+            leftPolygonAtPathLength = -1;
 
         }
 
@@ -84,24 +79,20 @@ namespace WebAnnotation.UI.Commands
         private int leftPolygonAtPathLength;
         protected override void OnPenPathChanged(object sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
-            if (PenInput.Path.Count < leftPolygonAtPathLength)
-                LineColor = Microsoft.Xna.Framework.Color.White;
-
             //Update the curve
-            this.curve_verticies = new CurveViewControlPoints(PenInput.Path, NumInterpolations: 0, TryToClose: false);
+            if(PenInput.Path.Count >= 2)
+                this.curve_verticies = new CurveViewControlPoints(PenInput.Path, NumInterpolations: 0, TryToClose: false);
+
+            if(!IsPathValid())
+            {
+                return;
+            }
 
             //Find a possible intersection point
             GridVector2? IntersectionPoint = PenInput.Segments.IntersectionPoint(PenInput.LastSegment, true, out GridLineSegment? IntersectedSegment);
 
-            GridVector2? PolygonIntersectionPoint = OriginalVolumePolygon.AllSegments.IntersectionPoint(PenInput.LastSegment, false);
-            if (PolygonIntersectionPoint.HasValue && LineColor != Microsoft.Xna.Framework.Color.Red)
-            {
-                LineColor = Microsoft.Xna.Framework.Color.Red;
-                leftPolygonAtPathLength = PenInput.Path.Count - 1;
-            }
-
             //If the intersection exists
-            if (IntersectionPoint.HasValue && LineColor != Microsoft.Xna.Framework.Color.Red)
+            if (IntersectionPoint.HasValue)
             {
                 GridVector2 IntersectedSegmentEndpoint = IntersectedSegment.Value.A;
                 int intersection_index = PenInput.Path.FindIndex(val => val == IntersectedSegmentEndpoint);
@@ -113,6 +104,23 @@ namespace WebAnnotation.UI.Commands
                 //Remove the endpoint that was just added which intersected our path and replace it with the intersection point
                 cropped_path[0] = IntersectionPoint.Value;
 
+                GridPolygon interiorHole = new GridPolygon(cropped_path);
+                
+
+                //Before we simplify, and send our path to be built, does it contain any interior holes
+                if(OriginalVolumePolygon.HasInteriorRings)
+                {
+                    foreach(GridVector2[] interiorRing in OriginalVolumePolygon.InteriorRings)
+                    {
+                        if(interiorHole.Contains(interiorRing[0]))
+                        {
+                            LineColor = Microsoft.Xna.Framework.Color.Red;
+                            leftPolygonAtPathLength = PenInput.Path.Count - 1;
+                            return;
+                        }
+                    }
+                }
+
                 PenInput.SimplifiedPath = cropped_path.DouglasPeuckerReduction(Global.PenSimplifyThreshold);
                 
                 this.Execute(PenInput.SimplifiedPath.ToArray());
@@ -121,6 +129,28 @@ namespace WebAnnotation.UI.Commands
             this.Parent.Invalidate();
         }
 
+        public bool IsPathValid()
+        {
+            if (PenInput.Path.Count < leftPolygonAtPathLength && leftPolygonAtPathLength != -1)
+            {
+                LineColor = Microsoft.Xna.Framework.Color.White;
+                leftPolygonAtPathLength = -1;
+            }
+
+            GridVector2? PolygonIntersectionPoint = OriginalVolumePolygon.AllSegments.IntersectionPoint(PenInput.LastSegment, false);
+            if (PolygonIntersectionPoint.HasValue && LineColor != Microsoft.Xna.Framework.Color.Red)
+            {
+                LineColor = Microsoft.Xna.Framework.Color.Red;
+                leftPolygonAtPathLength = PenInput.Path.Count - 1;
+            }
+
+            if(leftPolygonAtPathLength > -1)
+            {
+                return false;
+            }
+            return true;
+               
+        }
 
         protected override void OnPenPathComplete(object sender, GridVector2[] Path)
         {
